@@ -1,4 +1,4 @@
-use crate::error::{CliError, Result};
+use crate::domain::error::{DomainError, DomainResult};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -41,26 +41,34 @@ fn default_registry_url() -> String {
     String::from("http://localhost:3001")
 }
 
-fn config_path() -> Result<PathBuf> {
-    let home = dirs::home_dir().ok_or_else(|| CliError::Config("Cannot find home directory".to_string()))?;
+fn config_path() -> DomainResult<PathBuf> {
+    let home = dirs::home_dir()
+        .ok_or_else(|| DomainError::Config("Cannot find home directory".to_string()))?;
     Ok(home.join(CONFIG_DIR).join(CONFIG_FILE))
 }
 
-pub fn load() -> Result<Config> {
+pub fn load() -> DomainResult<Config> {
     let path = config_path()?;
     if !path.exists() {
         return Ok(Config::default());
     }
-    let content = fs::read_to_string(&path)?;
-    let config: Config = toml::from_str(&content)?;
+    let content = fs::read_to_string(&path)
+        .map_err(|e| DomainError::Io(format!("Failed to read config: {}", e)))?;
+    let config: Config = toml::from_str(&content)
+        .map_err(|e| DomainError::Config(format!("Failed to parse config: {}", e)))?;
     Ok(config)
 }
 
-pub fn save(config: &Config) -> Result<()> {
+pub fn save(config: &Config) -> DomainResult<()> {
     let path = config_path()?;
-    let dir = path.parent().ok_or_else(|| CliError::Config("Invalid config path".to_string()))?;
-    fs::create_dir_all(dir)?;
-    let content = toml::to_string_pretty(config)?;
-    fs::write(&path, content)?;
+    let dir = path
+        .parent()
+        .ok_or_else(|| DomainError::Config("Invalid config path".to_string()))?;
+    fs::create_dir_all(dir)
+        .map_err(|e| DomainError::Io(format!("Failed to create config dir: {}", e)))?;
+    let content = toml::to_string_pretty(config)
+        .map_err(|e| DomainError::Config(format!("Failed to serialize config: {}", e)))?;
+    fs::write(&path, content)
+        .map_err(|e| DomainError::Io(format!("Failed to write config: {}", e)))?;
     Ok(())
 }

@@ -7,6 +7,7 @@ use crate::domain::{
     },
     value_object::sort_order::SortOrder,
 };
+use crate::tui::event::ApiCall;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LoginField {
@@ -125,6 +126,9 @@ pub struct App {
     pub info_message: Option<String>,
     pub should_quit: bool,
     pub input_mode: InputMode,
+    pub is_authenticated: bool,
+    pub pending_page: Option<String>,
+    pub pending_action: Option<ApiCall>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -160,13 +164,20 @@ impl Default for App {
             info_message: None,
             should_quit: false,
             input_mode: InputMode::Normal,
+            is_authenticated: false,
+            pending_page: None,
+            pending_action: None,
         }
     }
 }
 
 impl App {
     pub fn new() -> Self {
-        Self::default()
+        let mut app = Self::default();
+        app.is_authenticated = false;
+        app.pending_page = None;
+        app.pending_action = None;
+        app
     }
 
     pub fn current_page(&self) -> &str {

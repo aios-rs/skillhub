@@ -1,7 +1,7 @@
 use crate::domain::error::{DomainError, DomainResult};
 use reqwest::{Client, StatusCode};
 use serde::Deserialize;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use crate::application::dto::{
     ApiReply, HubNamespaceDto, HubSearchResultDto, HubSkillDto, HubSkillFileDto,
@@ -12,7 +12,7 @@ use crate::application::dto::{
 pub struct SkillHubClient {
     client: Client,
     base_url: Arc<String>,
-    token: Arc<Option<String>>,
+    token: Arc<RwLock<Option<String>>>,
 }
 
 impl SkillHubClient {
@@ -20,23 +20,34 @@ impl SkillHubClient {
         Self {
             client: Client::new(),
             base_url: Arc::new(base_url),
-            token: Arc::new(token),
+            token: Arc::new(RwLock::new(token)),
         }
     }
 
+    pub fn set_token(&self, token: String) {
+        if let Ok(mut guard) = self.token.write() {
+            *guard = Some(token);
+        }
+    }
+
+    pub fn has_token(&self) -> bool {
+        self.token.read().map(|g| g.is_some()).unwrap_or(false)
+    }
+
     fn require_auth(&self) -> DomainResult<()> {
-        if self.token.as_ref().is_none() {
+        if self.token.read().map(|g| g.is_none()).unwrap_or(true) {
             return Err(DomainError::NotAuthenticated);
         }
         Ok(())
     }
 
     fn add_auth(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        if let Some(token) = self.token.as_ref() {
-            req.header("Authorization", format!("Bearer {}", token))
-        } else {
-            req
+        if let Ok(guard) = self.token.read() {
+            if let Some(token) = guard.as_ref() {
+                return req.header("Authorization", format!("Bearer {}", token));
+            }
         }
+        req
     }
 
     async fn get<T: for<'de> Deserialize<'de>>(&self, path: &str) -> DomainResult<T> {
@@ -359,6 +370,38 @@ impl SkillHubClient {
         }
 
         // Parse response to get token
+        let reply: ApiReply<serde_json::Value> = serde_json::from_str(&text)
+            .map_err(|e| DomainError::Parse(format!("Failed to parse response: {}", e)))?;
+
+        let data = reply.into_result()
+            .map_err(|msg| DomainError::Api(-1, msg))?;
+
+        let token = data.get("token")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| DomainError::Parse("Missing token in response".to_string()))?;
+
+        Ok(token.to_string())
+    }
+
+    pub async fn login_with_app(&self, app_id: &str, app_secret: &str) -> DomainResult<String> {
+        let url = format!("{}/api/auth/app-login", self.base_url);
+        let body = serde_json::json!({
+            "app_id": app_id,
+            "app_secret": app_secret
+        });
+        let resp = self.client.post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| DomainError::Http(e.to_string()))?;
+
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+
+        if status != StatusCode::OK {
+            return Err(DomainError::Api(status.as_u16() as i32, text));
+        }
+
         let reply: ApiReply<serde_json::Value> = serde_json::from_str(&text)
             .map_err(|e| DomainError::Parse(format!("Failed to parse response: {}", e)))?;
 

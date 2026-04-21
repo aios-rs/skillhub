@@ -1,4 +1,5 @@
 use crate::application::service::SkillHubService;
+use crate::infrastructure::client::SkillHubClient;
 use crate::infrastructure::config::{load, save as save_config};
 use crate::tui::{
     app::{App, LoginField},
@@ -19,11 +20,12 @@ use tokio_util::sync::CancellationToken;
 
 type Tui = Terminal<CrosstermBackend<std::io::Stdout>>;
 
-/// Run the TUI application
-/// Returns Ok(true) if config should be saved (e.g., after successful login)
+/// Run the TUI application.
+/// Always starts on home page. Login is prompted lazily when needed.
 pub async fn run(
     service: Arc<SkillHubService>,
-    is_first_login: bool,
+    client: Arc<SkillHubClient>,
+    is_authenticated: bool,
     _registry_url: String,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     enable_raw_mode()?;
@@ -32,12 +34,10 @@ pub async fn run(
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // Show cursor by default (will be hidden/positioned in render)
-
     let (event_tx, mut event_rx) = mpsc::channel(100);
     let cancel_token = CancellationToken::new();
 
-    // Spawn event producer
+    // Spawn tick event producer
     let event_tx_clone = event_tx.clone();
     let cancel_token_clone = cancel_token.clone();
     tokio::spawn(async move {
@@ -81,15 +81,11 @@ pub async fn run(
     });
 
     let mut app = App::new();
+    app.is_authenticated = is_authenticated;
     let mut should_save_config = false;
 
-    // Start on login page if not authenticated
-    if is_first_login {
-        app.navigate_to("login");
-        app.login.focused_field = LoginField::Username;
-        app.input_mode = crate::tui::app::InputMode::Editing;
-    } else {
-        // Initial stats load
+    // Always load stats on startup (public API)
+    {
         let service_clone = service.clone();
         let event_tx_clone = event_tx.clone();
         tokio::spawn(async move {
@@ -112,44 +108,37 @@ pub async fn run(
                 Event::Key(key) => {
                     let command = handle_key_event(key, &app);
                     if let Command::Login(username, password) = command {
-                        // Handle login
-                        app.loading = true;
-                        let service_clone = service.clone();
-                        let event_tx_clone = event_tx.clone();
-                        let username_clone = username.clone();
-                        tokio::spawn(async move {
-                            match service_clone.login(&username_clone, &password).await {
-                                Ok(token) => {
-                                    // Save token to config
-                                    if let Ok(mut config) = load() {
-                                        config.auth.token = Some(token);
-                                        if save_config(&config).is_ok() {
-                                            let _ = event_tx_clone.send(Event::ApiResult(ApiResult::LoginSuccess)).await;
-                                        } else {
-                                            let _ = event_tx_clone.send(Event::ApiResult(ApiResult::Error("Failed to save config".to_string()))).await;
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    let _ = event_tx_clone.send(Event::ApiResult(ApiResult::Error(format!("Login failed: {}", e)))).await;
-                                }
-                            }
-                        });
+                        handle_login(
+                            &username, &password, &service, &client,
+                            &mut app, event_tx.clone(),
+                        ).await;
                     } else {
-                        handle_command(command, &mut app, event_tx.clone(), &service).await;
+                        handle_command(command, &mut app, event_tx.clone(), &service, &client).await;
                     }
                 }
                 Event::Tick => {
                     app.on_tick();
                 }
                 Event::ApiCall(call) => {
-                    handle_api_call(call, &mut app, event_tx.clone(), &service).await;
+                    handle_api_call(call, &mut app, event_tx.clone(), &service, &client).await;
                 }
                 Event::ApiResult(result) => {
                     if let ApiResult::LoginSuccess = result {
                         should_save_config = true;
-                        app.navigate_to("home");
-                        // Load stats after successful login
+                        app.is_authenticated = true;
+
+                        // Navigate back to where the user was, or home
+                        if let Some(pending) = app.pending_page.take() {
+                            app.navigate_to(&pending);
+                            // Re-trigger the pending action
+                            if let Some(action) = app.pending_action.take() {
+                                let _ = event_tx.send(Event::ApiCall(action)).await;
+                            }
+                        } else {
+                            app.navigate_to("home");
+                        }
+
+                        // Load stats after login
                         let service_clone = service.clone();
                         let event_tx_clone = event_tx.clone();
                         tokio::spawn(async move {
@@ -184,12 +173,107 @@ pub async fn run(
     Ok(should_save_config)
 }
 
+async fn handle_login(
+    username: &str,
+    password: &str,
+    service: &Arc<SkillHubService>,
+    client: &Arc<SkillHubClient>,
+    app: &mut App,
+    event_tx: mpsc::Sender<Event>,
+) {
+    app.loading = true;
+    let service_clone = service.clone();
+    let client_clone = client.clone();
+    let event_tx_clone = event_tx.clone();
+    let username = username.to_string();
+    let password = password.to_string();
+    tokio::spawn(async move {
+        match service_clone.login(&username, &password).await {
+            Ok(token) => {
+                // Update client token
+                client_clone.set_token(token.clone());
+                // Save to config
+                if let Ok(mut config) = load() {
+                    config.auth.token = Some(token);
+                    if save_config(&config).is_ok() {
+                        let _ = event_tx_clone.send(Event::ApiResult(ApiResult::LoginSuccess)).await;
+                    } else {
+                        let _ = event_tx_clone.send(Event::ApiResult(ApiResult::Error("Failed to save config".to_string()))).await;
+                    }
+                }
+            }
+            Err(e) => {
+                let _ = event_tx_clone.send(Event::ApiResult(ApiResult::Error(format!("Login failed: {}", e)))).await;
+            }
+        }
+    });
+}
+
+/// Commands that require authentication. When triggered without auth,
+/// the user is redirected to the login page and the action is queued.
+fn requires_auth(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::Star
+            | Command::Unstar
+            | Command::Rate(_)
+            | Command::Download
+            | Command::Publish
+            | Command::MySkills
+            | Command::MyStars
+            | Command::Namespaces
+            | Command::Notifications
+            | Command::Tokens
+            | Command::Profile
+    )
+}
+
+/// Commands that are public and can be used without authentication.
+fn _is_public_api_call(call: &ApiCall) -> bool {
+    matches!(
+        call,
+        ApiCall::Search(_)
+            | ApiCall::GetSkillDetail(_, _)
+            | ApiCall::ListVersions(_, _)
+            | ApiCall::GetStats
+    )
+}
+
+fn requires_auth_api_call(call: &ApiCall) -> bool {
+    matches!(
+        call,
+        ApiCall::Star(_)
+            | ApiCall::Unstar(_)
+            | ApiCall::Rate(_, _)
+            | ApiCall::Download(_, _, _)
+            | ApiCall::ListNamespaces
+            | ApiCall::ListLabels
+            | ApiCall::ListMySkills
+            | ApiCall::ListMyStars
+            | ApiCall::ListNotifications
+            | ApiCall::MarkNotificationRead(_)
+    )
+}
+
 async fn handle_command(
     command: Command,
     app: &mut App,
     event_tx: mpsc::Sender<Event>,
     _service: &Arc<SkillHubService>,
+    _client: &Arc<SkillHubClient>,
 ) {
+    // Check if auth is required but user is not authenticated
+    if requires_auth(&command) && !app.is_authenticated {
+        // Save what the user was trying to do
+        app.pending_page = Some(app.current_page().to_string());
+        app.pending_action = command_to_api_call(&command, app);
+        app.navigate_to("login");
+        app.login.focused_field = LoginField::Username;
+        app.input_mode = crate::tui::app::InputMode::Editing;
+        app.set_error("Login required for this action".to_string());
+        return;
+    }
+
     match command {
         Command::InputChar(c) => {
             match app.login.focused_field {
@@ -229,12 +313,14 @@ async fn handle_command(
                     if !app.login.username.is_empty() && !app.login.password.is_empty() {
                         app.loading = true;
                         let service_clone = _service.clone();
+                        let client_clone = _client.clone();
                         let event_tx_clone = event_tx.clone();
                         let username = app.login.username.clone();
                         let password = app.login.password.clone();
                         tokio::spawn(async move {
                             match service_clone.login(&username, &password).await {
                                 Ok(token) => {
+                                    client_clone.set_token(token.clone());
                                     if let Ok(mut config) = load() {
                                         config.auth.token = Some(token);
                                         if save_config(&config).is_ok() {
@@ -306,7 +392,6 @@ async fn handle_command(
         }
         Command::Download => {
             app.set_info("Downloading...".to_string());
-            // Handle download based on current page
         }
         Command::Publish => {
             app.navigate_to("publish");
@@ -315,12 +400,38 @@ async fn handle_command(
     }
 }
 
+/// Convert a Command to its corresponding ApiCall for pending action after login.
+fn command_to_api_call(command: &Command, app: &App) -> Option<ApiCall> {
+    match command {
+        Command::Star => app.selected_skill().map(|s| ApiCall::Star(s.id.clone())),
+        Command::Unstar => app.selected_skill().map(|s| ApiCall::Unstar(s.id.clone())),
+        Command::Rate(score) => app.selected_skill().map(|s| ApiCall::Rate(s.id.clone(), *score)),
+        Command::MySkills => Some(ApiCall::ListMySkills),
+        Command::MyStars => Some(ApiCall::ListMyStars),
+        Command::Notifications => Some(ApiCall::ListNotifications),
+        Command::Namespaces => Some(ApiCall::ListNamespaces),
+        _ => None,
+    }
+}
+
 async fn handle_api_call(
     call: ApiCall,
     app: &mut App,
     event_tx: mpsc::Sender<Event>,
     service: &Arc<SkillHubService>,
+    _client: &Arc<SkillHubClient>,
 ) {
+    // Check if this API call requires auth but user isn't authenticated
+    if requires_auth_api_call(&call) && !app.is_authenticated {
+        app.pending_page = Some(app.current_page().to_string());
+        app.pending_action = Some(call);
+        app.navigate_to("login");
+        app.login.focused_field = LoginField::Username;
+        app.input_mode = crate::tui::app::InputMode::Editing;
+        app.set_error("Login required for this action".to_string());
+        return;
+    }
+
     app.loading = true;
 
     match call {

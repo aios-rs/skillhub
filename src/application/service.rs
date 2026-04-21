@@ -287,4 +287,11 @@ impl SkillHubService {
             None => Err(DomainError::Config("Auth repository not configured".to_string())),
         }
     }
+
+    pub async fn login_with_app(&self, app_id: &str, app_secret: &str) -> DomainResult<String> {
+        match &self.auth_repo {
+            Some(repo) => repo.login_with_app(app_id, app_secret).await,
+            None => Err(DomainError::Config("Auth repository not configured".to_string())),
+        }
+    }
 }

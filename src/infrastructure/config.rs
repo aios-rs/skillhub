@@ -24,6 +24,16 @@ pub struct RegistryConfig {
 pub struct AuthConfig {
     #[serde(default)]
     pub token: Option<String>,
+    #[serde(default)]
+    pub app_id: Option<String>,
+    #[serde(default)]
+    pub app_secret: Option<String>,
+}
+
+impl AuthConfig {
+    pub fn has_app_credentials(&self) -> bool {
+        self.app_id.is_some() && self.app_secret.is_some()
+    }
 }
 
 impl Default for Config {

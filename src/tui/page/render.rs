@@ -196,20 +196,24 @@ pub fn render_login_page(f: &mut Frame, app: &App) {
         Line::from("")
     } else if focused == LoginField::Password {
         Line::from(format!("{}█", "●".repeat(app.login.password.len())))
-            .style(Style::default().fg(Color::Rgb(34, 211, 238)))
+            .style(Style::default()
+                .fg(Color::Rgb(0, 255, 200))
+                .add_modifier(Modifier::BOLD))
     } else {
         Line::from(format!("{}", "●".repeat(app.login.password.len())))
-            .style(Style::default().fg(Color::Rgb(34, 211, 238)))
+            .style(Style::default()
+                .fg(Color::Rgb(0, 255, 200))
+                .add_modifier(Modifier::BOLD))
     };
 
     let password_input_style = if focused == LoginField::Password {
         Style::default()
-            .fg(Color::Rgb(226, 232, 240))
-            .bg(Color::Rgb(30, 58, 138))
+            .fg(Color::Rgb(0, 255, 200))
+            .bg(Color::Rgb(15, 35, 75))
     } else {
         Style::default()
-            .fg(Color::Rgb(226, 232, 240))
-            .bg(Color::Rgb(15, 23, 42))
+            .fg(Color::Rgb(200, 210, 230))
+            .bg(Color::Rgb(10, 18, 36))
     };
 
     let password_border_style = if focused == LoginField::Password {

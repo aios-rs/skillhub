@@ -196,7 +196,7 @@ impl SkillRepository for SkillRepositoryImpl {
     }
 
     async fn list_my_skills(&self, page: u32, page_size: u32) -> DomainResult<SearchResult> {
-        let dtos = self
+        let (dtos, total) = self
             .client
             .list_my_skills(page as i32, page_size as i32)
             .await?;
@@ -232,17 +232,16 @@ impl SkillRepository for SkillRepositoryImpl {
             })
             .collect();
 
-        let skills_len = skills.len();
         Ok(SearchResult {
             skills,
-            total: skills_len as i64,
+            total,
             page,
             page_size,
         })
     }
 
     async fn list_my_stars(&self, page: u32, page_size: u32) -> DomainResult<SearchResult> {
-        let dtos = self
+        let (dtos, total) = self
             .client
             .list_my_stars(page as i32, page_size as i32)
             .await?;
@@ -278,10 +277,9 @@ impl SkillRepository for SkillRepositoryImpl {
             })
             .collect();
 
-        let skills_len = skills.len();
         Ok(SearchResult {
             skills,
-            total: skills_len as i64,
+            total,
             page,
             page_size,
         })

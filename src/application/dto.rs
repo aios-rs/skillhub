@@ -1,5 +1,28 @@
 use serde::{Deserialize, Serialize};
 
+// ===== Auth =====
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct LoginResponse {
+    pub access_token: String,
+    pub refresh_token: String,
+    pub user: LoginUserDto,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct LoginUserDto {
+    pub avatar: Option<String>,
+    pub email: String,
+    pub email_verified: bool,
+    pub username: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RefreshTokenResponse {
+    pub access_token: String,
+    pub refresh_token: String,
+}
+
 // ===== Search & Skill =====
 
 #[derive(Debug, Clone, Deserialize)]
@@ -28,6 +51,7 @@ pub struct HubSkillDto {
     pub can_report: bool,
     pub created_at: String,
     pub updated_at: String,
+    #[serde(default)]
     pub latest_version: Option<String>,
 }
 
@@ -60,6 +84,7 @@ pub struct HubSkillFileDto {
 pub struct LabelDto {
     pub id: String,
     pub slug: String,
+    #[serde(rename = "type")]
     pub label_type: String,
     pub display_name: String,
     pub visible_in_filter: bool,
@@ -125,6 +150,7 @@ pub struct HubNamespaceDto {
     pub id: String,
     pub slug: String,
     pub display_name: String,
+    #[serde(rename = "type")]
     pub namespace_type: String,
     pub description: Option<String>,
     pub status: String,
@@ -183,19 +209,24 @@ pub struct PromotionDto {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct NotificationDto {
-    pub id: String,
+    pub id: i64,
+    pub user_id: String,
     pub notification_type: String,
     pub title: String,
     pub content: Option<String>,
-    pub data: Option<String>,
-    pub read: bool,
+    pub data: Option<serde_json::Value>,
+    pub read_at: Option<String>,
     pub created_at: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct NotificationPreferenceDto {
+    pub id: i64,
+    pub user_id: String,
     pub notification_type: String,
     pub enabled: bool,
+    pub channel: String,
+    pub updated_at: String,
 }
 
 // ===== Token =====
@@ -204,9 +235,11 @@ pub struct NotificationPreferenceDto {
 pub struct ApiTokenDto {
     pub id: String,
     pub name: String,
+    pub token_prefix: String,
     pub scopes: Vec<String>,
-    pub created_at: String,
     pub expires_at: Option<String>,
+    pub last_used_at: Option<String>,
+    pub created_at: String,
 }
 
 // ===== User =====
@@ -214,9 +247,10 @@ pub struct ApiTokenDto {
 #[derive(Debug, Clone, Deserialize)]
 pub struct UserProfileDto {
     pub id: String,
-    pub display_name: Option<String>,
+    pub display_name: String,
+    pub email: Option<String>,
     pub avatar_url: Option<String>,
-    pub email: String,
+    pub status: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

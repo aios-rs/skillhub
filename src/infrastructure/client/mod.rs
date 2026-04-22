@@ -1,18 +1,21 @@
 use crate::domain::error::{DomainError, DomainResult};
+use crate::domain::repository::auth_repository::AuthTokens;
 use reqwest::{Client, StatusCode};
 use serde::Deserialize;
 use std::sync::{Arc, RwLock};
 
 use crate::application::dto::{
     ApiReply, HubNamespaceDto, HubSearchResultDto, HubSkillDto, HubSkillFileDto,
-    HubSkillVersionDto, HubStatsDto, LabelDto, NotificationDto, NotificationPreferenceDto,
-    PublishResultDto, SkillSummaryDto,
+    HubSkillVersionDto, HubStatsDto, LabelDto, LoginResponse, NotificationDto,
+    NotificationPreferenceDto, PublishResultDto, RefreshTokenResponse, SkillSummaryDto,
 };
 
 pub struct SkillHubClient {
     client: Client,
     base_url: Arc<String>,
     token: Arc<RwLock<Option<String>>>,
+    refresh_token: Arc<RwLock<Option<String>>>,
+    refreshing: Arc<RwLock<bool>>,
 }
 
 impl SkillHubClient {
@@ -21,12 +24,23 @@ impl SkillHubClient {
             client: Client::new(),
             base_url: Arc::new(base_url),
             token: Arc::new(RwLock::new(token)),
+            refresh_token: Arc::new(RwLock::new(None)),
+            refreshing: Arc::new(RwLock::new(false)),
         }
     }
 
     pub fn set_token(&self, token: String) {
         if let Ok(mut guard) = self.token.write() {
             *guard = Some(token);
+        }
+    }
+
+    pub fn set_tokens(&self, access_token: String, refresh_token: Option<String>) {
+        if let Ok(mut guard) = self.token.write() {
+            *guard = Some(access_token);
+        }
+        if let Ok(mut guard) = self.refresh_token.write() {
+            *guard = refresh_token;
         }
     }
 
@@ -50,11 +64,81 @@ impl SkillHubClient {
         req
     }
 
+    async fn try_refresh_token(&self) -> DomainResult<()> {
+        // Prevent concurrent refreshes
+        {
+            let refreshing = self.refreshing.read().map(|g| *g).unwrap_or(false);
+            if refreshing {
+                return Err(DomainError::Unauthorized("Token refresh already in progress".to_string()));
+            }
+        }
+
+        let refresh_tok = self.refresh_token.read().ok().and_then(|g| g.clone());
+        match refresh_tok {
+            Some(rt) => {
+                if let Ok(mut guard) = self.refreshing.write() {
+                    *guard = true;
+                }
+
+                let result = self.do_refresh(&rt).await;
+
+                if let Ok(mut guard) = self.refreshing.write() {
+                    *guard = false;
+                }
+
+                match result {
+                    Ok(tokens) => {
+                        self.set_tokens(tokens.access_token, Some(tokens.refresh_token));
+                        Ok(())
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+            None => Err(DomainError::NotAuthenticated),
+        }
+    }
+
+    async fn do_refresh(&self, refresh_token: &str) -> DomainResult<RefreshTokenResponse> {
+        let url = format!("{}/api/auth/refresh_token", self.base_url);
+        let body = serde_json::json!({ "refresh_token": refresh_token });
+        let resp = self.client.post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| DomainError::Http(e.to_string()))?;
+
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+
+        if status != StatusCode::OK {
+            return Err(DomainError::Api(status.as_u16() as i32, text));
+        }
+
+        let reply: ApiReply<RefreshTokenResponse> = serde_json::from_str(&text)
+            .map_err(|e| DomainError::Parse(format!("Failed to parse refresh response: {}", e)))?;
+
+        reply
+            .into_result()
+            .map_err(|msg| DomainError::Api(-1, msg))
+    }
+
     async fn get<T: for<'de> Deserialize<'de>>(&self, path: &str) -> DomainResult<T> {
         let url = format!("{}{}", self.base_url, path);
         let req = self.client.get(&url);
         let req = self.add_auth(req);
         let resp = req.send().await.map_err(|e| DomainError::Http(e.to_string()))?;
+
+        if resp.status() == StatusCode::UNAUTHORIZED {
+            // Try refreshing the token
+            if self.try_refresh_token().await.is_ok() {
+                // Retry with new token
+                let req = self.client.get(&url);
+                let req = self.add_auth(req);
+                let resp = req.send().await.map_err(|e| DomainError::Http(e.to_string()))?;
+                return self.handle_response(resp).await;
+            }
+        }
+
         self.handle_response(resp).await
     }
 
@@ -67,6 +151,16 @@ impl SkillHubClient {
         let req = self.client.post(&url);
         let req = self.add_auth(req);
         let resp = req.json(body).send().await.map_err(|e| DomainError::Http(e.to_string()))?;
+
+        if resp.status() == StatusCode::UNAUTHORIZED {
+            if self.try_refresh_token().await.is_ok() {
+                let req = self.client.post(&url);
+                let req = self.add_auth(req);
+                let resp = req.json(body).send().await.map_err(|e| DomainError::Http(e.to_string()))?;
+                return self.handle_response(resp).await;
+            }
+        }
+
         self.handle_response(resp).await
     }
 
@@ -79,6 +173,16 @@ impl SkillHubClient {
         let req = self.client.put(&url);
         let req = self.add_auth(req);
         let resp = req.json(body).send().await.map_err(|e| DomainError::Http(e.to_string()))?;
+
+        if resp.status() == StatusCode::UNAUTHORIZED {
+            if self.try_refresh_token().await.is_ok() {
+                let req = self.client.put(&url);
+                let req = self.add_auth(req);
+                let resp = req.json(body).send().await.map_err(|e| DomainError::Http(e.to_string()))?;
+                return self.handle_response(resp).await;
+            }
+        }
+
         self.handle_response(resp).await
     }
 
@@ -87,6 +191,21 @@ impl SkillHubClient {
         let req = self.client.delete(&url);
         let req = self.add_auth(req);
         let resp = req.send().await.map_err(|e| DomainError::Http(e.to_string()))?;
+
+        if resp.status() == StatusCode::UNAUTHORIZED {
+            if self.try_refresh_token().await.is_ok() {
+                let req = self.client.delete(&url);
+                let req = self.add_auth(req);
+                let resp = req.send().await.map_err(|e| DomainError::Http(e.to_string()))?;
+                let status = resp.status();
+                if status != StatusCode::OK {
+                    let text = resp.text().await.unwrap_or_default();
+                    return Err(DomainError::Api(status.as_u16() as i32, text));
+                }
+                return Ok(());
+            }
+        }
+
         let status = resp.status();
         if status != StatusCode::OK {
             let text = resp.text().await.unwrap_or_default();
@@ -101,6 +220,21 @@ impl SkillHubClient {
         let req = self.client.get(&url);
         let req = self.add_auth(req);
         let resp = req.send().await.map_err(|e| DomainError::Http(e.to_string()))?;
+
+        if resp.status() == StatusCode::UNAUTHORIZED {
+            if self.try_refresh_token().await.is_ok() {
+                let req = self.client.get(&url);
+                let req = self.add_auth(req);
+                let resp = req.send().await.map_err(|e| DomainError::Http(e.to_string()))?;
+                let status = resp.status();
+                if status != StatusCode::OK {
+                    let text = resp.text().await.unwrap_or_default();
+                    return Err(DomainError::Api(status.as_u16() as i32, text));
+                }
+                return Ok(resp.bytes().await?.to_vec());
+            }
+        }
+
         let status = resp.status();
         if status != StatusCode::OK {
             let text = resp.text().await.unwrap_or_default();
@@ -119,6 +253,14 @@ impl SkillHubClient {
         let req = self.client.post(&url);
         let req = self.add_auth(req);
         let resp = req.multipart(form).send().await.map_err(|e| DomainError::Http(e.to_string()))?;
+
+        if resp.status() == StatusCode::UNAUTHORIZED {
+            if self.try_refresh_token().await.is_ok() {
+                // Can't easily rebuild multipart, so just return the error
+                return Err(DomainError::NotAuthenticated);
+            }
+        }
+
         self.handle_response(resp).await
     }
 
@@ -266,7 +408,7 @@ impl SkillHubClient {
         .await
     }
 
-    pub async fn list_my_skills(&self, page: i32, page_size: i32) -> DomainResult<Vec<SkillSummaryDto>> {
+    pub async fn list_my_skills(&self, page: i32, page_size: i32) -> DomainResult<(Vec<SkillSummaryDto>, i64)> {
         self.get(&format!(
             "/api/skill-hub/me/skills?page={}&page_size={}",
             page, page_size
@@ -274,7 +416,7 @@ impl SkillHubClient {
         .await
     }
 
-    pub async fn list_my_stars(&self, page: i32, page_size: i32) -> DomainResult<Vec<SkillSummaryDto>> {
+    pub async fn list_my_stars(&self, page: i32, page_size: i32) -> DomainResult<(Vec<SkillSummaryDto>, i64)> {
         self.get(&format!(
             "/api/skill-hub/me/stars?page={}&page_size={}",
             page, page_size
@@ -300,7 +442,7 @@ impl SkillHubClient {
         &self,
         page: i32,
         page_size: i32,
-    ) -> DomainResult<Vec<NotificationDto>> {
+    ) -> DomainResult<(Vec<NotificationDto>, i64)> {
         self.get(&format!(
             "/api/skill-hub/notifications?page={}&page_size={}",
             page, page_size
@@ -350,7 +492,7 @@ impl SkillHubClient {
 
     // ===== Auth endpoints =====
 
-    pub async fn login(&self, username: &str, password: &str) -> DomainResult<String> {
+    pub async fn login(&self, username: &str, password: &str) -> DomainResult<AuthTokens> {
         let url = format!("{}/api/auth/login", self.base_url);
         let body = serde_json::json!({
             "username": username,
@@ -369,21 +511,19 @@ impl SkillHubClient {
             return Err(DomainError::Api(status.as_u16() as i32, text));
         }
 
-        // Parse response to get token
-        let reply: ApiReply<serde_json::Value> = serde_json::from_str(&text)
+        let reply: ApiReply<LoginResponse> = serde_json::from_str(&text)
             .map_err(|e| DomainError::Parse(format!("Failed to parse response: {}", e)))?;
 
         let data = reply.into_result()
             .map_err(|msg| DomainError::Api(-1, msg))?;
 
-        let token = data.get("token")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| DomainError::Parse("Missing token in response".to_string()))?;
-
-        Ok(token.to_string())
+        Ok(AuthTokens {
+            access_token: data.access_token,
+            refresh_token: Some(data.refresh_token),
+        })
     }
 
-    pub async fn login_with_app(&self, app_id: &str, app_secret: &str) -> DomainResult<String> {
+    pub async fn login_with_app(&self, app_id: &str, app_secret: &str) -> DomainResult<AuthTokens> {
         let url = format!("{}/api/auth/app-login", self.base_url);
         let body = serde_json::json!({
             "app_id": app_id,
@@ -402,16 +542,15 @@ impl SkillHubClient {
             return Err(DomainError::Api(status.as_u16() as i32, text));
         }
 
-        let reply: ApiReply<serde_json::Value> = serde_json::from_str(&text)
+        let reply: ApiReply<LoginResponse> = serde_json::from_str(&text)
             .map_err(|e| DomainError::Parse(format!("Failed to parse response: {}", e)))?;
 
         let data = reply.into_result()
             .map_err(|msg| DomainError::Api(-1, msg))?;
 
-        let token = data.get("token")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| DomainError::Parse("Missing token in response".to_string()))?;
-
-        Ok(token.to_string())
+        Ok(AuthTokens {
+            access_token: data.access_token,
+            refresh_token: Some(data.refresh_token),
+        })
     }
 }

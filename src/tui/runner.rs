@@ -189,12 +189,13 @@ async fn handle_login(
     let password = password.to_string();
     tokio::spawn(async move {
         match service_clone.login(&username, &password).await {
-            Ok(token) => {
-                // Update client token
-                client_clone.set_token(token.clone());
+            Ok(tokens) => {
+                // Update client tokens
+                client_clone.set_tokens(tokens.access_token.clone(), tokens.refresh_token.clone());
                 // Save to config
                 if let Ok(mut config) = load() {
-                    config.auth.token = Some(token);
+                    config.auth.token = Some(tokens.access_token);
+                    config.auth.refresh_token = tokens.refresh_token;
                     if save_config(&config).is_ok() {
                         let _ = event_tx_clone.send(Event::ApiResult(ApiResult::LoginSuccess)).await;
                     } else {
@@ -319,10 +320,11 @@ async fn handle_command(
                         let password = app.login.password.clone();
                         tokio::spawn(async move {
                             match service_clone.login(&username, &password).await {
-                                Ok(token) => {
-                                    client_clone.set_token(token.clone());
+                                Ok(tokens) => {
+                                    client_clone.set_tokens(tokens.access_token.clone(), tokens.refresh_token.clone());
                                     if let Ok(mut config) = load() {
-                                        config.auth.token = Some(token);
+                                        config.auth.token = Some(tokens.access_token);
+                                        config.auth.refresh_token = tokens.refresh_token;
                                         if save_config(&config).is_ok() {
                                             let _ = event_tx_clone.send(Event::ApiResult(ApiResult::LoginSuccess)).await;
                                         } else {

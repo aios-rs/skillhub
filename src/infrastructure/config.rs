@@ -25,6 +25,8 @@ pub struct AuthConfig {
     #[serde(default)]
     pub token: Option<String>,
     #[serde(default)]
+    pub refresh_token: Option<String>,
+    #[serde(default)]
     pub app_id: Option<String>,
     #[serde(default)]
     pub app_secret: Option<String>,

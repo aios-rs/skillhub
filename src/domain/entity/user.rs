@@ -1,9 +1,10 @@
 #[derive(Debug, Clone)]
 pub struct UserProfile {
     pub id: String,
-    pub display_name: Option<String>,
+    pub display_name: String,
+    pub email: Option<String>,
     pub avatar_url: Option<String>,
-    pub email: String,
+    pub status: String,
 }
 
 #[derive(Debug, Clone)]

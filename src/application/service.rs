@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use crate::domain::{
     repository::{
-        AuthRepository, LabelRepository, NamespaceRepository, NotificationRepository,
+        auth_repository::AuthTokens, AuthRepository, LabelRepository, NamespaceRepository, NotificationRepository,
         PromotionRepository, ReportRepository, ReviewRepository,
         SkillRepository, TokenRepository, UserRepository,
     },
@@ -281,14 +281,14 @@ impl SkillHubService {
     }
 
     // Auth methods
-    pub async fn login(&self, username: &str, password: &str) -> DomainResult<String> {
+    pub async fn login(&self, username: &str, password: &str) -> DomainResult<AuthTokens> {
         match &self.auth_repo {
             Some(repo) => repo.login(username, password).await,
             None => Err(DomainError::Config("Auth repository not configured".to_string())),
         }
     }
 
-    pub async fn login_with_app(&self, app_id: &str, app_secret: &str) -> DomainResult<String> {
+    pub async fn login_with_app(&self, app_id: &str, app_secret: &str) -> DomainResult<AuthTokens> {
         match &self.auth_repo {
             Some(repo) => repo.login_with_app(app_id, app_secret).await,
             None => Err(DomainError::Config("Auth repository not configured".to_string())),

@@ -682,8 +682,8 @@ pub fn render_notifications_page(f: &mut Frame, app: &App) {
             };
             Line::from(vec![
                 Span::styled(
-                    if notif.read { " " } else { "●" },
-                    Style::default().fg(if notif.read { Color::Reset } else { Color::Yellow }),
+                    if notif.is_read() { " " } else { "●" },
+                    Style::default().fg(if notif.is_read() { Color::Reset } else { Color::Yellow }),
                 ),
                 Span::styled(format!(" {}", notif.title), style),
             ])

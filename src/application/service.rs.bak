@@ -1,21 +1,21 @@
+use std::sync::Arc;
 use crate::domain::{
-    entity::{
-        label::Label,
-        namespace::Namespace,
-        notification::{Notification, NotificationPreference},
-        review::ReviewTask,
-        skill::{HubStats, Skill, SkillFile, SkillLifecycleMutationResponse, SkillVersion},
-        token::ApiToken,
-        user::UserProfile,
-    },
-    error::{DomainError, DomainResult},
     repository::{
         auth_repository::AuthTokens, AuthRepository, LabelRepository, NamespaceRepository, NotificationRepository,
         PromotionRepository, ReportRepository, ReviewRepository,
         SkillRepository, TokenRepository, UserRepository,
     },
+    error::{DomainError, DomainResult},
+    entity::{
+        skill::{HubStats, Skill, SkillFile, SkillVersion},
+        namespace::Namespace,
+        label::Label,
+        notification::{Notification, NotificationPreference},
+        review::ReviewTask,
+        token::ApiToken,
+        user::UserProfile,
+    },
 };
-use std::sync::Arc;
 
 pub struct SkillHubService {
     auth_repo: Option<Arc<dyn AuthRepository>>,
@@ -67,6 +67,11 @@ impl SkillHubService {
     }
 
     pub fn with_report_repo(mut self, repo: Arc<dyn ReportRepository>) -> Self {
+        self.report_repo = Some(repo);
+        self
+    }
+
+    pub fn with_promotion_repo(mut self, repo: Arc<dyn PromotionRepository>) -> Self {
         self.report_repo = Some(repo);
         self
     }
@@ -146,16 +151,6 @@ impl SkillHubService {
         self.skill_repo.list_files(namespace, slug, version).await
     }
 
-    pub async fn get_file_content(
-        &self,
-        namespace: &str,
-        slug: &str,
-        version: &str,
-        path: &str,
-    ) -> DomainResult<String> {
-        self.skill_repo.get_file_content(namespace, slug, version, path).await
-    }
-
     pub async fn get_stats(&self) -> DomainResult<HubStats> {
         self.skill_repo.get_stats().await
     }
@@ -170,6 +165,16 @@ impl SkillHubService {
         Ok((result.skills, result.total))
     }
 
+    pub async fn get_file_content(
+        &self,
+        namespace: &str,
+        slug: &str,
+        version: &str,
+        path: &str,
+    ) -> DomainResult<String> {
+        self.skill_repo.get_file_content(namespace, slug, version, path).await
+    }
+
     pub async fn submit_report(
         &self,
         namespace: &str,
@@ -178,7 +183,7 @@ impl SkillHubService {
         description: Option<&str>,
     ) -> DomainResult<()> {
         match &self.report_repo {
-            Some(repo) => repo.submit(namespace, slug, reason, description).await.map(|_| ()),
+            Some(repo) => repo.submit(namespace, slug, reason, description).await,
             None => Err(DomainError::NotAuthenticated),
         }
     }
@@ -206,31 +211,6 @@ impl SkillHubService {
 
     pub async fn download_latest(&self, namespace: &str, slug: &str) -> DomainResult<Vec<u8>> {
         self.skill_repo.download_latest(namespace, slug).await
-    }
-
-    // Lifecycle management methods
-    pub async fn archive(&self, namespace: &str, slug: &str) -> DomainResult<SkillLifecycleMutationResponse> {
-        self.skill_repo.archive(namespace, slug).await
-    }
-
-    pub async fn unarchive(&self, namespace: &str, slug: &str) -> DomainResult<SkillLifecycleMutationResponse> {
-        self.skill_repo.unarchive(namespace, slug).await
-    }
-
-    pub async fn yank_version(&self, namespace: &str, slug: &str, version: &str, reason: &str) -> DomainResult<SkillLifecycleMutationResponse> {
-        self.skill_repo.yank_version(namespace, slug, version, reason).await
-    }
-
-    pub async fn rerelease_version(&self, namespace: &str, slug: &str, version: &str) -> DomainResult<SkillLifecycleMutationResponse> {
-        self.skill_repo.rerelease_version(namespace, slug, version).await
-    }
-
-    pub async fn submit_review(&self, namespace: &str, slug: &str, version: &str, comment: Option<&str>) -> DomainResult<SkillLifecycleMutationResponse> {
-        self.skill_repo.submit_review(namespace, slug, version, comment).await
-    }
-
-    pub async fn withdraw_review(&self, namespace: &str, slug: &str, version: &str) -> DomainResult<SkillLifecycleMutationResponse> {
-        self.skill_repo.withdraw_review(namespace, slug, version).await
     }
 
     // Namespace methods

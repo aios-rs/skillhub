@@ -199,6 +199,262 @@ enum Commands {
         /// Token ID
         id: String,
     },
+
+    // ===== 新增指令 =====
+
+    /// Verify your authentication status
+    Whoami,
+
+    /// Browse latest skills
+    Explore {
+        /// Maximum number of results (1-200)
+        #[arg(long, default_value_t = 25)]
+        limit: u32,
+        /// Sort order (newest, downloads, rating, name)
+        #[arg(long, short = 's', default_value = "newest")]
+        sort: String,
+    },
+
+    /// Inspect a skill in detail
+    Inspect {
+        /// Namespace slug
+        namespace: String,
+        /// Skill slug
+        slug: String,
+        /// List version history
+        #[arg(long)]
+        versions: bool,
+        /// List files in the specified version
+        #[arg(long)]
+        files: bool,
+        /// Show content of a specific file
+        #[arg(long, value_name = "PATH")]
+        file: Option<String>,
+        /// Version to inspect (default: latest)
+        #[arg(long)]
+        version: Option<String>,
+    },
+
+    /// Report a skill
+    Report {
+        /// Namespace slug
+        namespace: String,
+        /// Skill slug
+        slug: String,
+        /// Report reason
+        reason: String,
+        /// Detailed description
+        #[arg(long, short = 'd')]
+        description: Option<String>,
+    },
+
+    /// Install a skill locally
+    Install {
+        /// Namespace slug
+        namespace: String,
+        /// Skill slug
+        slug: String,
+        /// Version to install (default: latest)
+        #[arg(long)]
+        version: Option<String>,
+        /// Skip confirmation prompt
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
+
+    /// Uninstall a local skill
+    Uninstall {
+        /// Namespace slug
+        namespace: String,
+        /// Skill slug
+        slug: String,
+        /// Skip confirmation prompt
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
+
+    /// List installed skills
+    List,
+
+    /// Update installed skills
+    Update {
+        /// Skill to update (format: namespace/slug)
+        skill: Option<String>,
+        /// Update all installed skills
+        #[arg(long)]
+        all: bool,
+    },
+
+    /// Skill lifecycle management commands
+    #[command(subcommand)]
+    Skill(SkillCommands),
+
+    /// Review management commands
+    #[command(subcommand)]
+    Review(ReviewCommands),
+
+    /// Transfer ownership commands
+    #[command(subcommand)]
+    Transfer(TransferCommands),
+
+    /// Admin commands
+    #[command(subcommand)]
+    Admin(AdminCommands),
+}
+
+#[derive(Subcommand)]
+enum SkillCommands {
+    /// Delete a skill (soft-delete/archive)
+    Delete {
+        /// Namespace slug
+        namespace: String,
+        /// Skill slug
+        slug: String,
+    },
+    /// Restore a deleted skill
+    Undelete {
+        /// Namespace slug
+        namespace: String,
+        /// Skill slug
+        slug: String,
+    },
+    /// Hide a skill (alias for delete)
+    Hide {
+        /// Namespace slug
+        namespace: String,
+        /// Skill slug
+        slug: String,
+    },
+    /// Unhide a skill (alias for undelete)
+    Unhide {
+        /// Namespace slug
+        namespace: String,
+        /// Skill slug
+        slug: String,
+    },
+    /// Rename a skill
+    Rename {
+        /// Namespace slug
+        namespace: String,
+        /// Current skill slug
+        slug: String,
+        /// New slug
+        new_slug: String,
+    },
+    /// Yank a version
+    Yank {
+        /// Namespace slug
+        namespace: String,
+        /// Skill slug
+        slug: String,
+        /// Version string
+        version: String,
+        /// Reason for yanking
+        #[arg(short, long)]
+        reason: Option<String>,
+    },
+    /// Re-release a yanked version
+    Rerelease {
+        /// Namespace slug
+        namespace: String,
+        /// Skill slug
+        slug: String,
+        /// Version string
+        version: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum ReviewCommands {
+    /// Submit a skill for review
+    Submit {
+        /// Namespace slug
+        namespace: String,
+        /// Skill slug
+        slug: String,
+        /// Version string
+        version: String,
+        /// Review comment
+        #[arg(short, long)]
+        comment: Option<String>,
+    },
+    /// Withdraw a review
+    Withdraw {
+        /// Namespace slug
+        namespace: String,
+        /// Skill slug
+        slug: String,
+        /// Version string
+        version: String,
+    },
+    /// List review tasks
+    List {
+        /// Filter by status
+        #[arg(short, long)]
+        status: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum TransferCommands {
+    /// Request ownership transfer
+    Request {
+        /// Namespace slug
+        namespace: String,
+        /// Skill slug
+        slug: String,
+        /// Target user handle
+        target_handle: String,
+        /// Transfer message
+        #[arg(short, long)]
+        message: Option<String>,
+    },
+    /// List transfer requests
+    List {
+        /// Show outgoing instead of incoming
+        #[arg(short, long)]
+        outgoing: bool,
+    },
+    /// Accept a transfer request
+    Accept {
+        /// Transfer request ID
+        id: String,
+    },
+    /// Reject a transfer request
+    Reject {
+        /// Transfer request ID
+        id: String,
+    },
+    /// Cancel a transfer request
+    Cancel {
+        /// Transfer request ID
+        id: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum AdminCommands {
+    /// Ban a user
+    BanUser {
+        /// User handle or ID
+        handle: String,
+        /// Ban reason
+        #[arg(short, long)]
+        reason: Option<String>,
+        /// Treat argument as user ID
+        #[arg(short, long)]
+        id: bool,
+    },
+    /// Change user role
+    SetRole {
+        /// User handle or ID
+        handle: String,
+        /// New role
+        role: String,
+        /// Treat argument as user ID
+        #[arg(short, long)]
+        id: bool,
+    },
 }
 
 #[tokio::main]
@@ -558,7 +814,475 @@ async fn run_cli_command(cmd: Commands, registry: Option<String>) -> Result<(), 
             println!("{}", "Token deleted.".green());
         }
 
+        Commands::Whoami => {
+            let (service, _) = create_service(registry).await?;
+            match service.get_user_profile().await? {
+                Some(profile) => {
+                    println!("{}", "Logged in as:".green().bold());
+                    println!("  Username: {}", profile.display_name);
+                    if let Some(email) = &profile.email {
+                        println!("  Email:    {}", email.dimmed());
+                    }
+                    println!("  Status:   {}", profile.status);
+                    println!("  User ID:  {}", profile.id);
+                }
+                None => eprintln!("{}", "Not authenticated. Run `skillhub login` first.".yellow()),
+            }
+        }
+
+        Commands::Explore { limit, sort } => {
+            let (service, _) = create_service(registry).await?;
+            let (skills, total) = service.search_skills(None, None, Vec::new(), sort, 1, limit).await?;
+            println!("{}", format!("Latest skills ({} total):", total).cyan().bold());
+            for skill in &skills {
+                let version = skill.latest_version.as_deref().unwrap_or("-");
+                let updated = skill.updated_at.split('T').next().unwrap_or(&skill.updated_at);
+                println!(
+                    "  {}/{} v{} {} {}",
+                    skill.namespace_slug.bold(),
+                    skill.slug,
+                    version.dimmed(),
+                    skill.status,
+                    updated.dimmed()
+                );
+                if let Some(summary) = &skill.summary {
+                    let truncated = if summary.len() > 60 {
+                        format!("{}...", &summary[..60])
+                    } else {
+                        summary.clone()
+                    };
+                    println!("    {}", truncated.dimmed());
+                }
+            }
+            if skills.is_empty() {
+                println!("  No skills found.");
+            }
+        }
+
+        Commands::Inspect { namespace, slug, versions, files, file, version } => {
+            let (service, _) = create_service(registry).await?;
+
+            // Get skill detail
+            match service.get_skill_detail(&namespace, &slug).await? {
+                Some(skill) => {
+                    println!("{}", format!("{}: {}", skill.namespace_slug, skill.slug).cyan().bold());
+                    if let Some(name) = &skill.display_name {
+                        println!("  Name:     {}", name);
+                    }
+                    if let Some(summary) = &skill.summary {
+                        println!("  Summary:  {}", summary);
+                    }
+                    println!("  Owner:    {}", skill.owner_name);
+                    println!("  Status:   {}", skill.status);
+                    let version = version.as_deref().or(skill.latest_version.as_deref()).unwrap_or("-");
+                    println!("  Version:  {}", version);
+                    println!("  Downloads: {}", skill.download_count);
+                    println!("  Stars:    {}", skill.star_count);
+                    if skill.rating_count > 0 {
+                        println!("  Rating:   {:.1}/5 ({})", skill.rating_avg, skill.rating_count);
+                    }
+                    if !skill.tags.is_empty() {
+                        println!("  Tags:     {}", skill.tags.join(", "));
+                    }
+                    println!("  Updated:  {}", skill.updated_at);
+                }
+                None => eprintln!("{}", "Skill not found.".red()),
+            }
+
+            // List versions if requested
+            if versions {
+                let vers = service.list_versions(&namespace, &slug, 1, 100).await?;
+                println!("\n{}", "Versions:".cyan().bold());
+                for v in &vers {
+                    let status_color = match v.status.as_str() {
+                        "active" => v.status.green(),
+                        "yanked" => v.status.red(),
+                        _ => v.status.normal(),
+                    };
+                    println!(
+                        "  v{} [{}] files:{} size:{}",
+                        v.version,
+                        status_color,
+                        v.file_count,
+                        v.total_size
+                    );
+                }
+            }
+
+            // List files if requested
+            if files {
+                let ver = version.as_deref();
+                let skill_ver = service.get_skill_detail(&namespace, &slug).await?.ok_or("Skill not found")?;
+                let ver_str = ver.or(skill_ver.latest_version.as_deref()).ok_or("No version available")?;
+                let file_list = service.list_files(&namespace, &slug, ver_str).await?;
+                println!("\n{}", format!("Files (v{}):", ver_str).cyan().bold());
+                for f in &file_list {
+                    println!("  {} ({} bytes)", f.file_path, f.file_size);
+                }
+            }
+
+            // Show file content if requested
+            if let Some(file_path) = file {
+                let ver = version.as_deref();
+                let skill_ver = service.get_skill_detail(&namespace, &slug).await?.ok_or("Skill not found")?;
+                let ver_str = ver.or(skill_ver.latest_version.as_deref()).ok_or("No version available")?;
+                let content = service.get_file_content(&namespace, &slug, ver_str, &file_path).await?;
+                println!("\n{}", format!("{}:{}:", ver_str, file_path).cyan().bold());
+                for line in content.lines().take(100) {
+                    println!("  {}", line);
+                }
+            }
+        }
+
+        Commands::Report { namespace, slug, reason, description } => {
+            let (service, _) = create_service(registry).await?;
+            service.submit_report(&namespace, &slug, &reason, description.as_deref()).await?;
+            println!("{}", "Report submitted. Thank you for helping keep SkillHub safe!".green());
+        }
+
+        Commands::Install { namespace, slug, version, yes: _yes } => {
+            use infrastructure::local_store::LocalStore;
+
+            let (service, _) = create_service(registry).await?;
+            let mut local_store = LocalStore::new()?;
+
+            // 获取技能详情以确定版本
+            let skill_detail = service.get_skill_detail(&namespace, &slug).await?
+                .ok_or_else(|| format!("Skill {}/{} not found", namespace, slug))?;
+
+            let install_version = version.as_deref()
+                .or(skill_detail.latest_version.as_deref())
+                .ok_or("No version available")?;
+
+            println!("{}", format!("Installing {}/{} v{}...", namespace, slug, install_version).cyan().bold());
+
+            // 下载技能包
+            let data = service.download_bundle(&namespace, &slug, install_version).await?;
+
+            // 安装到本地
+            let skill_dir = local_store.install(&namespace, &slug, install_version, data).await?;
+
+            println!("{} {}", "✅".green(), format!("Installed to: {}", skill_dir.display()).green());
+
+            // 如果是 Rust 项目，检查环境
+            if let Some(installed) = local_store.get_installed(&namespace, &slug) {
+                if matches!(installed.skill_type, infrastructure::local_store::SkillType::Rust) {
+                    println!();
+                    println!("{}", "🦀 Rust project detected!".cyan().bold());
+
+                    // 检测是否在国内（通过检查系统语言或使用 iana_time_zone）
+                    let is_china = std::env::var("LANG")
+                        .ok()
+                        .filter(|l| l.contains("zh_CN") || l.contains("zh_CN.UTF-8"))
+                        .is_some();
+
+                    if is_china {
+                        let _ = local_store.setup_china_mirror();
+                    }
+
+                    // 询问是否构建
+                    use dialoguer::Confirm;
+                    let should_build = Confirm::new()
+                        .with_prompt("Build this Rust project now? (cargo build --release)")
+                        .default(false)
+                        .interact()?;
+
+                    if should_build {
+                        match local_store.build_rust_project(&skill_dir) {
+                            Ok(_) => println!("{} {}", "✅".green(), "Build complete!".green()),
+                            Err(e) => eprintln!("{} {}", "⚠".yellow(), format!("Build skipped: {}", e)),
+                        }
+                    } else {
+                        println!("{} You can build it later with:", "ℹ".cyan());
+                        println!("   cd {}", skill_dir.display());
+                        println!("   cargo build --release");
+                    }
+                }
+            }
+        }
+
+        Commands::Uninstall { namespace, slug, yes } => {
+            use infrastructure::local_store::LocalStore;
+            use dialoguer::Confirm;
+
+            let mut local_store = LocalStore::new()?;
+
+            // 检查是否已安装
+            let installed = local_store.get_installed(&namespace, &slug);
+            if installed.is_none() {
+                eprintln!("{}", format!("Skill {}/{} is not installed", namespace, slug).yellow());
+                return Ok(());
+            }
+
+            let installed = installed.unwrap();
+
+            // 确认卸载
+            if !yes {
+                let should_remove = Confirm::new()
+                    .with_prompt(&format!("Uninstall {}/{} (v{})?", namespace, slug, installed.version))
+                    .default(false)
+                    .interact()?;
+
+                if !should_remove {
+                    println!("{}", "Uninstall cancelled".dimmed());
+                    return Ok(());
+                }
+            }
+
+            local_store.uninstall(&namespace, &slug).await?;
+            println!("{}", format!("✅ Uninstalled {}/{}", namespace, slug).green());
+        }
+
+        Commands::List => {
+            use infrastructure::local_store::LocalStore;
+
+            let local_store = LocalStore::new()?;
+            let installed = local_store.list()?;
+
+            if installed.is_empty() {
+                println!("{}", "No skills installed yet.".dimmed());
+                println!("{}", "Install a skill with: skillhub install <namespace> <slug>".dimmed());
+            } else {
+                println!("{}", format!("Installed skills ({}):", installed.len()).cyan().bold());
+                for skill in &installed {
+                    let type_icon = match skill.skill_type {
+                        infrastructure::local_store::SkillType::Rust => "🦀",
+                        infrastructure::local_store::SkillType::JavaScript => "📦",
+                        infrastructure::local_store::SkillType::Python => "🐍",
+                        infrastructure::local_store::SkillType::Archive => "📦",
+                    };
+                    let line = format!("  {} {}/{} v{}",
+                        type_icon, skill.namespace, skill.slug, skill.version);
+                    println!("{}", line);
+                    println!("    {}", skill.install_path.display().to_string().dimmed());
+                }
+            }
+        }
+
+        Commands::Update { skill, all } => {
+            use infrastructure::local_store::LocalStore;
+
+            let (service, _) = create_service(registry).await?;
+            let mut local_store = LocalStore::new()?;
+            let installed = local_store.list()?;
+
+            if installed.is_empty() {
+                eprintln!("{}", "No skills installed yet.".yellow());
+                return Ok(());
+            }
+
+            // 确定要更新的技能
+            let skills_to_update: Vec<_> = if all {
+                installed.iter().collect()
+            } else if let Some(skill_ref) = skill {
+                let parts: Vec<&str> = skill_ref.split('/').collect();
+                if parts.len() != 2 {
+                    eprintln!("{}", format!("Invalid skill format: '{}'. Use 'namespace/slug'", skill_ref).red());
+                    return Ok(());
+                }
+                let (ns, sl) = (parts[0], parts[1]);
+                installed.iter().filter(|s| s.namespace == ns && s.slug == sl).collect()
+            } else {
+                eprintln!("{}", "Please specify --all or a specific skill (e.g., my-namespace/my-skill)".yellow());
+                return Ok(());
+            };
+
+            if skills_to_update.is_empty() {
+                println!("{}", "No matching skills found to update.".dimmed());
+                return Ok(());
+            }
+
+            println!("{}", format!("Checking updates for {} skill(s)...", skills_to_update.len()).cyan().bold());
+
+            for installed_skill in skills_to_update {
+                println!();
+                println!("{}", format!("Checking {}/{}...", installed_skill.namespace, installed_skill.slug).cyan());
+
+                // 获取最新版本
+                match service.get_skill_detail(&installed_skill.namespace, &installed_skill.slug).await? {
+                    Some(detail) => {
+                        let latest_version = detail.latest_version.as_deref().unwrap_or("unknown");
+
+                        if latest_version == installed_skill.version {
+                            println!("  {} Already up-to-date (v{})", "✅".green(), latest_version);
+                        } else {
+                            println!("  {} Update available: v{} -> v{}", "⬆".yellow(), installed_skill.version, latest_version);
+
+                            // 下载并更新
+                            match service.download_bundle(&installed_skill.namespace, &installed_skill.slug, latest_version).await {
+                                Ok(data) => {
+                                    match local_store.update(&installed_skill.namespace, &installed_skill.slug, latest_version, data).await {
+                                        Ok(_) => println!("  {} Updated to v{}", "✅".green(), latest_version),
+                                        Err(e) => eprintln!("  {} Failed to update: {}", "❌".red(), e),
+                                    }
+                                }
+                                Err(e) => eprintln!("  {} Failed to download: {}", "❌".red(), e),
+                            }
+                        }
+                    }
+                    None => {
+                        println!("  {} Skill not found on hub", "⚠".yellow());
+                    }
+                }
+            }
+
+            println!();
+            println!("{}", "✅ Update check complete!".green());
+        }
+
+        Commands::Skill(skill_cmd) => {
+            run_skill_command(skill_cmd, registry).await?;
+        }
+
+        Commands::Review(review_cmd) => {
+            run_review_command(review_cmd, registry).await?;
+        }
+
+        Commands::Transfer(transfer_cmd) => {
+            run_transfer_command(transfer_cmd, registry).await?;
+        }
+
+        Commands::Admin(admin_cmd) => {
+            run_admin_command(admin_cmd, registry).await?;
+        }
+
         _ => unreachable!(),
+    }
+
+    Ok(())
+}
+
+async fn run_skill_command(cmd: SkillCommands, registry: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+    let (service, _) = create_service(registry).await?;
+
+    match cmd {
+        SkillCommands::Delete { namespace, slug } | SkillCommands::Hide { namespace, slug } => {
+            match service.archive(&namespace, &slug).await {
+                Ok(resp) => println!("{}", format!("Skill {} deleted: {}", slug, resp.new_status).green()),
+                Err(e) => eprintln!("{} {}", "Failed to delete skill:".red(), e),
+            }
+        }
+
+        SkillCommands::Undelete { namespace, slug } | SkillCommands::Unhide { namespace, slug } => {
+            match service.unarchive(&namespace, &slug).await {
+                Ok(resp) => println!("{}", format!("Skill {} restored: {}", slug, resp.new_status).green()),
+                Err(e) => eprintln!("{} {}", "Failed to restore skill:".red(), e),
+            }
+        }
+
+        SkillCommands::Rename { namespace, slug, new_slug } => {
+            // TODO: Implement rename API
+            println!("{} Renaming {} to {}...", "Pending backend API:".yellow(), slug, new_slug);
+        }
+
+        SkillCommands::Yank { namespace, slug, version, reason } => {
+            let r = reason.as_deref().unwrap_or("No reason provided");
+            match service.yank_version(&namespace, &slug, &version, r).await {
+                Ok(resp) => println!("{}", format!("Version {} yanked: {}", version, resp.new_status).green()),
+                Err(e) => eprintln!("{} {}", "Failed to yank version:".red(), e),
+            }
+        }
+
+        SkillCommands::Rerelease { namespace, slug, version } => {
+            match service.rerelease_version(&namespace, &slug, &version).await {
+                Ok(resp) => println!("{}", format!("Version {} re-released: {}", version, resp.new_status).green()),
+                Err(e) => eprintln!("{} {}", "Failed to rerelease version:".red(), e),
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn run_review_command(cmd: ReviewCommands, registry: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+    let (service, _) = create_service(registry).await?;
+
+    match cmd {
+        ReviewCommands::Submit { namespace, slug, version, comment } => {
+            match service.submit_review(&namespace, &slug, &version, comment.as_deref()).await {
+                Ok(resp) => println!("{}", format!("Review submitted: {}", resp.new_status).green()),
+                Err(e) => eprintln!("{} {}", "Failed to submit review:".red(), e),
+            }
+        }
+
+        ReviewCommands::Withdraw { namespace, slug, version } => {
+            match service.withdraw_review(&namespace, &slug, &version).await {
+                Ok(resp) => println!("{}", format!("Review withdrawn: {}", resp.new_status).green()),
+                Err(e) => eprintln!("{} {}", "Failed to withdraw review:".red(), e),
+            }
+        }
+
+        ReviewCommands::List { status } => {
+            let reviews = service.list_reviews(status.as_deref()).await?;
+            let status_text = status.as_ref().map(|s| format!(" ({})", s)).unwrap_or_default();
+            println!("{}", format!("Review tasks{}:", status_text).cyan());
+            for r in &reviews {
+                println!("  {} [{}] {}", r.id, r.status, r.created_at);
+                if let Some(c) = &r.comment {
+                    println!("    {}", c.dimmed());
+                }
+            }
+            if reviews.is_empty() {
+                println!("  No review tasks found.");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn run_transfer_command(cmd: TransferCommands, _registry: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+    match cmd {
+        TransferCommands::Request { namespace, slug, target_handle, message } => {
+            println!("{} Transfer request for {}/{} to {} ({:?})",
+                "Pending backend API:".yellow(),
+                namespace, slug, target_handle, message
+            );
+        }
+
+        TransferCommands::List { outgoing } => {
+            println!("{} Listing {} transfer requests...",
+                "Pending backend API:".yellow(),
+                if outgoing { "outgoing" } else { "incoming" }
+            );
+        }
+
+        TransferCommands::Accept { id } => {
+            println!("{} Accepting transfer request {}...", "Pending backend API:".yellow(), id);
+        }
+
+        TransferCommands::Reject { id } => {
+            println!("{} Rejecting transfer request {}...", "Pending backend API:".yellow(), id);
+        }
+
+        TransferCommands::Cancel { id } => {
+            println!("{} Cancelling transfer request {}...", "Pending backend API:".yellow(), id);
+        }
+    }
+
+    Ok(())
+}
+
+async fn run_admin_command(cmd: AdminCommands, _registry: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+    match cmd {
+        AdminCommands::BanUser { handle, reason, id } => {
+            println!("{} Banning {} ({:?})...",
+                "Pending backend API:".yellow(),
+                if id { "ID" } else { "handle" },
+                handle
+            );
+            if let Some(r) = reason {
+                println!("  Reason: {}", r);
+            }
+        }
+
+        AdminCommands::SetRole { handle, role, id } => {
+            println!("{} Setting role for {} to {} ({:?})...",
+                "Pending backend API:".yellow(),
+                if id { "ID" } else { "handle" },
+                handle, role
+            );
+        }
     }
 
     Ok(())
